@@ -1,0 +1,27 @@
+{
+  "name": "space-app-demo",
+  "version": "1.0.0",
+  "description": "Omnichannel air quality index agent demo for NASA Space Apps.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node setup.js",
+    "reset:demo": "node reset-demo.js",
+    "show:intelligence": "node show-intelligence.js",
+    "close:conversation": "node close-conversation.js"
+  },
+  "engines": {
+    "node": ">=22.13.0",
+    "npm": ">=9.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "openai": "^4.56.0",
+    "twilio": "^5.10.7",
+    "twilio-agent-connect": "^1.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
