@@ -1,3 +1,31 @@
+Hey Jonathan! Here's some steps to get started.
+
+1. Install the dependencies: npm install
+2. Install ngrok globally (or your preferred method)
+3. Start your (ngrok) server: ngrok http 8000
+4. Paste the server's address (without https://) in the .env file line 10
+
+### Twilio Console
+> Communications > Numbers & Senders > (under My Inventory)
+5. Select the number Walk and Hack, under Configuration details, go to the Voice and emergency address. Edit configuration details, select United States.
+6. Add the (ngrok) address to the Voice configuration for the walk & halk number WITH /twiml at the end of the address (and include the https://). Should resembel https://<url>/twiml
+
+
+> Orchestration > Conversation configurations > (Select walk-and-hack) > (Edit) >
+7. Under "Webhook" replace the Callback URL to your (ngrok) server address WITH /webhook at the end. Should resembel https://<url>/webhook. Seelct POST for the http method.
+
+7. Start the local server: node server.js
+8. The current demo is running agents under in the agents folder. On line 5, feel free to swap it for another agent or test one that you're building.
+9. It's an agricultural bot. It will ask you for your zip code and suggest crops to plant.
+
+
+
+
+
+
+
+
+
 # Twilio Agent Connect Starter Guide
 
 This project is a small Twilio Agent Connect application for learning how to connect an AI agent to Twilio Voice and SMS.
