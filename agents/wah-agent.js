@@ -91,12 +91,11 @@ async function ensureApp(key) {
   user.appId = app.id;
   user.sandboxId = app.current_sandbox_id || null;
 
-  for (let i = 0; i < 60 && !user.sandboxId; i += 1) {
-    await sleep(3000);
-    const fresh = await sb("GET", `/v1/apps/${app.id}`);
-    user.sandboxId = fresh.current_sandbox_id || null;
+  if (!user.sandboxId) {
+    const created = await sb("POST", `/v1/apps/${app.id}/sandbox`, {});
+    user.sandboxId = created.id || created.sandbox_id || created.current_sandbox_id || null;
   }
-  if (!user.sandboxId) throw new Error("sandbox never appeared for app " + app.id);
+  if (!user.sandboxId) throw new Error("could not create a sandbox for app " + app.id);
   saveState();
   return user;
 }
@@ -147,7 +146,8 @@ async function runBuild(key, prompt, conversationId, channel) {
     const { url } = await previewUrl(user.sandboxId);
     let text;
     if (result?.status === "succeeded") {
-      const note = result.agent_message ? `\n\n${String(result.agent_message).slice(0, 280)}` : "";
+      const changed = (result.files_changed || []).filter((f) => !f.startsWith("node_modules/")).length;
+      const note = result.agent_message ? `\n\n${String(result.agent_message).slice(0, 280)}` : changed ? `\n\n${changed} file${changed === 1 ? "" : "s"} changed.` : "";
       const buildNote = result.build_status === "failed" ? "\n\n(Heads up: the build step reported an error, so the page may not have updated. Text me what you see.)" : "";
       text = `Done! Open it here: ${url}${note}${buildNote}\n\nText me what to change next.`;
     } else if (result?.status === "running" || !result) {
