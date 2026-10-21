@@ -31,7 +31,7 @@ const server = new TACServer(tac, {
   port: Number.parseInt(process.env.TWILIO_SERVER_PORT || process.env.PORT || "8000", 10),
 });
 
-const previewHost = /^[a-z0-9-]+\.app\.camino\.markets$/i;
+const previewHost = /^[a-z0-9-]+\.app\.dweller\.sh$/i;
 server.fastify.get("/tls-ask", (request, reply) => {
   const domain = String(request.query?.domain || "");
   return previewHost.test(domain) ? reply.code(200).send("ok") : reply.code(404).send("no");

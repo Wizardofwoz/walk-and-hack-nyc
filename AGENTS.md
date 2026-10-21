@@ -13,7 +13,7 @@ Sponsor contact: Kaelyn Chresfield (Twilio devrel). Her repo: `kchresfield/walk-
   immediate "on it" reply, background task, result texted via TAC `sendResponse` (falls back to
   Twilio REST if the TAC conversation closed). Per-user state in `data/users.json` (gitignored).
 - `server.js` — Kaelyn's starter with the agent import swapped, plus `/healthz` and `/tls-ask`
-  (Caddy on-demand TLS allowlist for `*.app.camino.markets`).
+  (Caddy on-demand TLS allowlist for `*.app.dweller.sh`).
 - `.env` — Kaelyn's Twilio keys + OpenAI key (gitignored, CRLF stripped). Canonical copy is AWS
   SSM Parameter Store `/wah/bridge.env` (SecureString, us-east-1). `/wah/openrouter.key` holds Jon's OpenRouter key.
 
@@ -21,16 +21,16 @@ Sponsor contact: Kaelyn Chresfield (Twilio devrel). Her repo: `kchresfield/walk-
 
 - EC2 `i-02141dd122d2b508d`, t3.large, Ubuntu 24.04, 60 GB, EIP `54.174.142.68`, SG `walk-and-hack-web` (80/443),
   IAM role `walk-and-hack-server` (SSM + read `/wah/*`). No SSH: use `aws ssm send-command`.
-- DNS (Cloudflare zone camino.markets, unproxied A records): `walk.camino.markets` and `*.app.camino.markets` → EIP.
-- Caddy (`/etc/caddy/Caddyfile`): `walk.camino.markets` → bridge :8000; `*.app.camino.markets` → Traefik :8080
+- DNS (Cloudflare zone dweller.sh, unproxied A records, added by API outside Dweller's Terraform; moved off camino.markets 2026-10-21): `walk.dweller.sh` and `*.app.dweller.sh` → EIP.
+- Caddy (`/etc/caddy/Caddyfile`): `walk.dweller.sh` → bridge :8000; `*.app.dweller.sh` → Traefik :8080
   with on-demand TLS gated by the bridge's `/tls-ask`. Note: use `handle` blocks; a bare `respond` runs before `reverse_proxy`.
 - Bridge: `/opt/wah/bridge` (this repo, branch `bridge`), systemd `wah-bridge`. Deploy = `/opt/wah/deploy.sh`
   (git fetch fork/bridge, reset, npm install, rebuild `.env` from SSM + `/opt/wah/extra.env`, restart).
   `extra.env` holds `SANDBOXD_API_KEY`, `SANDBOXD_URL`, `WAH_AGENT=opencode`, `WAH_PROVIDER=<model-provider id>`,
   `WAH_MODEL=anthropic/claude-sonnet-5.5`, `WAH_PRESET=react-vite`.
 - sandboxd: `/opt/sandboxd/src` (source build, `docker compose`), API `127.0.0.1:9090`, `.env` has
-  `PREVIEW_DOMAIN=app.camino.markets PREVIEW_HOST_STYLE=flat HTTP_PORT=8080` and the bootstrap API token.
-  Preview URLs come back as `http://s-<id>-<port>.app.camino.markets:8080`; the bridge rewrites to https without port.
+  `PREVIEW_DOMAIN=app.dweller.sh PREVIEW_HOST_STYLE=flat HTTP_PORT=8080` and the bootstrap API token.
+  Preview URLs come back as `http://s-<id>-<port>.app.dweller.sh:8080`; the bridge rewrites to https without port.
   Model: one model-provider "OpenRouter" (openai-completions) with Claude Sonnet 5.5 / Haiku 5.5; agent OpenCode.
   Claude Code is installed in the base image but needs an Anthropic key (`POST /v1/agents/claude-code/api-key`).
   Installer gotcha: `.env` must contain a `SANDBOXD_API_TOKENS=` line or install.sh dies silently (pipefail + grep).
@@ -38,7 +38,7 @@ Sponsor contact: Kaelyn Chresfield (Twilio devrel). Her repo: `kchresfield/walk-
 
 ## Twilio side (Kaelyn's account, number +1 917 512 5901)
 
-- Voice webhook `https://walk.camino.markets/twiml`, SMS webhook `https://walk.camino.markets/webhook`,
+- Voice webhook `https://walk.dweller.sh/twiml`, SMS webhook `https://walk.dweller.sh/webhook`,
   Conversation Configuration `conv_configuration_01m4xtgh6dep4tkzm7rvq0yygv` status callback → same `/webhook`
   (all set via API 2026-10-21; update the config with PUT of the full object, PATCH is unsupported).
 
