@@ -2,7 +2,7 @@ import "dotenv/config";
 
 import { SMSChannel, TAC, TACConfig, TACServer, VoiceChannel } from "twilio-agent-connect";
 
-import { handleAgentMessage } from "./agents/field-shift-agent.js";
+import { attachTAC, handleAgentMessage } from "./agents/wah-agent.js";
 
 for (const name of [
   "TWILIO_RCS_SENDER_ID",
@@ -16,16 +16,26 @@ for (const name of [
 }
 
 const tac = await TAC.create({ config: TACConfig.fromEnv() });
+attachTAC(tac);
 
 tac.registerChannel(new VoiceChannel(tac, { memoryMode: "always" }));
 tac.registerChannel(new SMSChannel(tac, { memoryMode: "always" }));
 
-tac.onMessageReady(async ({ conversationId, message, memory, session, channel }) => {
+tac.onMessageReady(async ({ conversationId, profileId, message, author, memory, session, channel }) => {
   console.log(`[${channel}] ${message}`);
-  return handleAgentMessage(message, { conversationId, memory, session, channel });
+  return handleAgentMessage(message, { conversationId, profileId, author, memory, session, channel });
 });
 
-await new TACServer(tac, {
+const server = new TACServer(tac, {
   host: process.env.TWILIO_SERVER_HOST || "0.0.0.0",
   port: Number.parseInt(process.env.TWILIO_SERVER_PORT || process.env.PORT || "8000", 10),
-}).start();
+});
+
+const previewHost = /^[a-z0-9-]+\.app\.camino\.markets$/i;
+server.fastify.get("/tls-ask", (request, reply) => {
+  const domain = String(request.query?.domain || "");
+  return previewHost.test(domain) ? reply.code(200).send("ok") : reply.code(404).send("no");
+});
+server.fastify.get("/healthz", () => ({ ok: true }));
+
+await server.start();
