@@ -459,7 +459,12 @@ export async function handleAgentMessage(userMessage, context = {}) {
 
 // ---------- the wall ----------
 
-export function publicBuilds() {
+export async function publicBuilds() {
+  for (const u of Object.values(state.users)) {
+    if (u.sandboxId && !u.link && u.tasks > 0) {
+      try { u.link = (await previewUrl(u.sandboxId)).url; saveState(); } catch { /* next time */ }
+    }
+  }
   return Object.values(state.users)
     .filter((u) => u.link && u.tasks > 0)
     .map((u) => ({ title: u.title || "Untitled build", name: u.name || null, link: u.link, builds: u.tasks, updatedAt: u.updatedAt || u.createdAt, building: Boolean(u.running) }))
