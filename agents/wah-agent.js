@@ -372,7 +372,7 @@ async function openrouter(messages, tools) {
       method: "POST",
       signal: ctrl.signal,
       headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}`, "Content-Type": "application/json", "HTTP-Referer": `https://${PUBLIC_HOST}`, "X-Title": "Walk & Hack" },
-      body: JSON.stringify({ model: TALKER_MODEL, messages, tools, tool_choice: "auto", max_tokens: 400, temperature: 0.4 }),
+      body: JSON.stringify({ model: TALKER_MODEL, messages, tools, tool_choice: "auto", max_tokens: 1500, temperature: 0.4 }),
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(`openrouter ${res.status}: ${JSON.stringify(data.error || data).slice(0, 300)}`);
