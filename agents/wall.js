@@ -41,7 +41,7 @@ async function load(){
     c.querySelector('small').textContent=(it.name?'by '+it.name+' · ':'')+it.builds+' build'+(it.builds===1?'':'s');
     g.prepend(c);
   }
-  for(const c of [...g.children]) if(!seen.has(c.querySelector('a').href)) c.remove();
+  for(const c of [...g.children]) if(!seen.has(c.querySelector('a').getAttribute('href'))) c.remove();
 }
 function esc(s){return String(s).replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}
 load();setInterval(load,30000);
