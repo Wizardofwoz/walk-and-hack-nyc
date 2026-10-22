@@ -101,10 +101,21 @@ async function ensureApp(key) {
 }
 
 async function waitSandboxRunning(sandboxId) {
+  let woke = false;
   for (let i = 0; i < 80; i += 1) {
     const s = await sb("GET", `/v1/sandboxes/${sandboxId}`);
     if (s.status === "running") return s;
     if (s.status === "error") throw new Error("sandbox is in error state");
+    if (s.status === "stopped" && !woke) {
+      woke = true;
+      console.log(`[wah] sandbox ${sandboxId} is stopped (idle reaper); waking`);
+      try {
+        const started = await sb("POST", `/v1/sandboxes/${sandboxId}/start`);
+        if (started?.status === "running") return started;
+      } catch (e) {
+        console.log(`[wah] wake failed for ${sandboxId}: ${e.message}`);
+      }
+    }
     await sleep(3000);
   }
   throw new Error("sandbox did not reach running state");
