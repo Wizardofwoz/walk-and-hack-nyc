@@ -34,6 +34,9 @@ Sponsor contact: Kaelyn Chresfield (Twilio devrel). Her repo: `kchresfield/walk-
   Model: one model-provider "OpenRouter" (openai-completions) with Claude Sonnet 5.5 / Haiku 5.5; agent OpenCode.
   Claude Code is installed in the base image but needs an Anthropic key (`POST /v1/agents/claude-code/api-key`).
   Installer gotcha: `.env` must contain a `SANDBOXD_API_TOKENS=` line or install.sh dies silently (pipefail + grep).
+- Idle reaper: sandboxd stops a sandbox after ~35 min without activity. The bridge wakes a `stopped` sandbox with
+  `POST /v1/sandboxes/{id}/start` before running a task (fixed 2026-10-22 after Jon's 8:38pm build died with
+  "sandbox did not reach running state"); wake takes ~1.5 s. Opening the preview URL also wakes it.
 - Smoke test: `/opt/wah/e2e.sh` (creates app `e2e-test`, runs a build, prints the public link).
 
 ## Twilio side (Kaelyn's account, number +1 917 512 5901)
