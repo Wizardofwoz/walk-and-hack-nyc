@@ -92,8 +92,14 @@ async function ensureApp(key) {
   user.sandboxId = app.current_sandbox_id || null;
 
   if (!user.sandboxId) {
-    const created = await sb("POST", `/v1/apps/${app.id}/sandbox`, {});
-    user.sandboxId = created.id || created.sandbox_id || created.current_sandbox_id || null;
+    try {
+      const created = await sb("POST", `/v1/apps/${app.id}/sandbox`, {});
+      user.sandboxId = created.id || created.sandbox_id || created.current_sandbox_id || null;
+    } catch (error) {
+      if (!/409/.test(error.message)) throw error;
+      const fresh = await sb("GET", `/v1/apps/${app.id}`);
+      user.sandboxId = fresh.current_sandbox_id || null;
+    }
   }
   if (!user.sandboxId) throw new Error("could not create a sandbox for app " + app.id);
   saveState();
@@ -245,6 +251,8 @@ export async function handleAgentMessage(userMessage, context = {}) {
   }
 
   const firstTime = !user.sandboxId && user.tasks === 0;
+  user.running = { taskId: null, startedAt: new Date().toISOString(), prompt: text };
+  saveState();
   runBuild(key, text, context.conversationId, context.channel);
 
   if (voice) return firstTime ? "Love it. Setting up your workshop and building that now. I'll text you a link in a few minutes." : "On it. I'll text you when it's done.";
