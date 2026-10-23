@@ -474,9 +474,12 @@ export async function health() {
   };
   const t0 = Date.now();
   try {
-    const list = await Promise.race([sb("GET", "/v1/sandboxes"), sleep(8000).then(() => { throw new Error("sandboxd timeout 8s"); })]);
-    const arr = Array.isArray(list) ? list : list?.sandboxes || list?.items || [];
-    out.sandboxd = { ok: true, ms: Date.now() - t0, count: arr.length, running: arr.filter((x) => x.status === "running").length, error: null };
+    const list = await Promise.race([sb("GET", "/v1/apps"), sleep(8000).then(() => { throw new Error("sandboxd timeout 8s"); })]);
+    const arr = Array.isArray(list) ? list : list?.apps || [];
+    const sample = users.find((u) => u.sandboxId)?.sandboxId;
+    let running = null;
+    if (sample) { try { running = (await sb("GET", `/v1/sandboxes/${sample}`))?.status || null; } catch (e) { running = `err: ${e.message}`; } }
+    out.sandboxd = { ok: true, ms: Date.now() - t0, count: arr.length, running, error: null };
   } catch (e) {
     out.sandboxd = { ok: false, ms: Date.now() - t0, count: null, running: null, error: e.message };
     out.ok = false;
