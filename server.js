@@ -2,7 +2,7 @@ import "dotenv/config";
 
 import { SMSChannel, TAC, TACConfig, TACServer, VoiceChannel } from "twilio-agent-connect";
 
-import { attachTAC, handleAgentMessage, publicBuilds } from "./agents/wah-agent.js";
+import { attachTAC, broadcast, handleAgentMessage, publicBuilds } from "./agents/wah-agent.js";
 import { wallHtml } from "./agents/wall.js";
 
 for (const name of [
@@ -46,5 +46,15 @@ server.fastify.get("/tls-ask", (request, reply) => {
 server.fastify.get("/healthz", () => ({ ok: true }));
 server.fastify.get("/wall", (request, reply) => reply.type("text/html").send(wallHtml()));
 server.fastify.get("/wall.json", () => publicBuilds());
+server.fastify.post("/nudge", async (request, reply) => {
+  const token = process.env.WAH_NUDGE_TOKEN;
+  if (!token || request.headers["x-wah-token"] !== token) return reply.code(401).send({ error: "unauthorized" });
+  const { text, dry, only } = request.body || {};
+  try {
+    return await broadcast(text, { dry: Boolean(dry), only: Array.isArray(only) ? only : null });
+  } catch (e) {
+    return reply.code(400).send({ error: e.message });
+  }
+});
 
 await server.start();

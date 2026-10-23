@@ -457,6 +457,33 @@ export async function handleAgentMessage(userMessage, context = {}) {
   });
 }
 
+// ---------- group nudges ----------
+
+export async function broadcast(text, { dry = false, only = null } = {}) {
+  const body = String(text || "").trim();
+  if (!body) throw new Error("empty nudge");
+  const seen = new Set();
+  const result = { sent: 0, skipped: 0, failed: 0, dry, recipients: 0 };
+  for (const user of Object.values(state.users)) {
+    const phone = String(user.phone || "").replace(/[^0-9+]/g, "");
+    if (!phone || user.optedOut || seen.has(phone)) { result.skipped++; continue; }
+    if (only && !only.includes(phone)) { result.skipped++; continue; }
+    seen.add(phone);
+    result.recipients++;
+    if (dry) continue;
+    try {
+      await sendText(user, null, body);
+      addTurn(user, { role: "event", text: `Texted the whole group: "${body}"` });
+      result.sent++;
+    } catch (e) {
+      console.warn("[wah] nudge failed for", phone.slice(-4), e.message);
+      result.failed++;
+    }
+  }
+  saveState();
+  return result;
+}
+
 // ---------- the wall ----------
 
 export async function publicBuilds() {
