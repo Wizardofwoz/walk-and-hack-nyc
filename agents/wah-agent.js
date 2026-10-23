@@ -32,7 +32,7 @@ export const MASTHEAD = [
   "WALK & HACK — AI Tinkerers NYC x Twilio",
   "You're texting a coding agent. Tell it what to build (text or call this number) and it builds a real web app and texts you the link. Then just say what to change.",
   "Under the hood: Twilio Agent Connect handles the phone + memory, each caller gets a private sandbox, and Claude does the building. Builds are on us today.",
-  `Everything built shows up at ${WALL_URL}. Tell me your name if you want it on there.`,
+  `Everything built shows up at ${WALL_URL}. Tell me your name to put yours in the 12:30 demo lineup.`,
   'Try: "make a page that counts pigeons". Reply STOP to opt out.',
 ].join("\n\n");
 
@@ -333,7 +333,7 @@ function systemPrompt(user, channel, memory) {
     "- Greet returning callers like you remember them (you do: the transcript and Twilio memory are below). Don't re-explain the product to someone who has already built something.",
     "- Small talk is fine; keep it brief and steer back to building.",
     "- If they ask what this is or how it works: Twilio Agent Connect handles the phone and memory, each caller gets a private sandbox, Claude does the building, Jon from AI Tinkerers built the bridge. Honest and short.",
-    "- If they give their name, call set_name. Builds appear on the live wall (" + WALL_URL + ") with the project title, and their name only if they gave it. Never mention phone numbers.",
+    "- If they give their name, call set_name. Builds appear on the live wall (" + WALL_URL + ") with the project title. Giving a name is how they submit for the demo circle at 12:30: named apps go to the top of the wall as the lineup, unnamed ones show lower with the title only. If they ask how to submit or enter, tell them: just tell me your name. Never mention phone numbers.",
     "- Say 'reply STOP to opt out' only if asked how to stop.",
     "",
     `CALLER STATE: ${user.title ? `project "${user.title}"` : "no project yet"}; ${user.link ? `current link ${user.link}` : "no link yet"}; ${user.running ? "a build is running right now" : "no build running"}; ${user.pending ? "changes are queued for the next build" : ""}; ${user.name ? `name ${user.name}` : "name not given"}; builds so far ${user.tasks}.`,
@@ -526,8 +526,8 @@ export async function publicBuilds() {
   }
   return Object.values(state.users)
     .filter((u) => u.link && u.tasks > 0)
-    .map((u) => ({ title: u.title || "Untitled build", name: u.name || null, link: u.link, builds: u.tasks, updatedAt: u.updatedAt || u.createdAt, building: Boolean(u.running) }))
-    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    .map((u) => ({ title: u.title || "Untitled build", name: u.name || null, submitted: Boolean(u.name), link: u.link, builds: u.tasks, updatedAt: u.updatedAt || u.createdAt, building: Boolean(u.running) }))
+    .sort((a, b) => (Number(b.submitted) - Number(a.submitted)) || String(b.updatedAt).localeCompare(String(a.updatedAt)));
 }
 
 function sleep(ms) {
