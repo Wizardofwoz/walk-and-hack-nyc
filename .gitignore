@@ -21,3 +21,5 @@ helpers.jsdata/
 
 AGENTS.md
 bin/
+ops/.monitor-state.json
+ops/.primer-posted
