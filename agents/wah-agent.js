@@ -228,6 +228,7 @@ async function runBuild(key, instructions) {
 
   await withLock(key, async () => {
     user.running = null;
+    noteTask(Boolean(event.ok));
     addTurn(user, { role: "event", text: buildEventText(event) });
     const pending = user.pending;
     user.pending = null;
@@ -456,6 +457,34 @@ export async function handleAgentMessage(userMessage, context = {}) {
     return reply;
   });
 }
+
+// ---------- health ----------
+
+const healthLog = { lastError: null, lastErrorAt: null, lastTaskAt: null, lastTaskOk: null };
+const origError = console.error.bind(console);
+console.error = (...args) => { healthLog.lastError = args.map(String).join(" ").slice(0, 300); healthLog.lastErrorAt = now(); origError(...args); };
+
+export async function health() {
+  const users = Object.values(state.users);
+  const out = {
+    ok: true, at: now(), users: users.length, building: users.filter((u) => u.running).length,
+    builds: users.reduce((n, u) => n + (u.tasks || 0), 0), optedOut: users.filter((u) => u.optedOut).length,
+    talker: Boolean(OPENROUTER_API_KEY), tac: Boolean(tacRef), uptimeS: Math.round(process.uptime()),
+    sandboxd: { ok: false, ms: null, count: null, running: null, error: null }, ...healthLog,
+  };
+  const t0 = Date.now();
+  try {
+    const list = await Promise.race([sb("GET", "/v1/sandboxes"), sleep(8000).then(() => { throw new Error("sandboxd timeout 8s"); })]);
+    const arr = Array.isArray(list) ? list : list?.sandboxes || list?.items || [];
+    out.sandboxd = { ok: true, ms: Date.now() - t0, count: arr.length, running: arr.filter((x) => x.status === "running").length, error: null };
+  } catch (e) {
+    out.sandboxd = { ok: false, ms: Date.now() - t0, count: null, running: null, error: e.message };
+    out.ok = false;
+  }
+  return out;
+}
+
+export function noteTask(ok) { healthLog.lastTaskAt = now(); healthLog.lastTaskOk = ok; }
 
 // ---------- group nudges ----------
 
