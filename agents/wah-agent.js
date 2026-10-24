@@ -288,27 +288,22 @@ async function runBuild(key, instructions, resumeTaskId) {
     } else {
     await ensureApp(key);
     await waitSandboxRunning(user.sandboxId);
-    const note = secretsNote(key);
-    task = await sb("POST", `/v1/sandboxes/${user.sandboxId}/tasks`, {
-      prompt: note ? `${instructions}\n\n${note}` : instructions,
-      agent: AGENT,
-      ...(MODEL ? { model: MODEL } : {}),
-      ...(PROVIDER ? { provider: PROVIDER } : {}),
-      continue: true,
-      timeout_s: TASK_TIMEOUT_S,
-    });
+    task = await createTask(key, instructions, !user.freshSession);
+    if (user.freshSession) { user.freshSession = false; }
     user.running.taskId = task.id;
     user.tasks += 1;
     saveState();
     console.log(`[wah] ${key} task ${task.id} started`);
     }
 
-    let result;
-    const deadline = Date.now() + (TASK_TIMEOUT_S + 120) * 1000;
-    while (Date.now() < deadline) {
-      await sleep(5000);
-      result = await sb("GET", `/v1/sandboxes/${user.sandboxId}/tasks/${task.id}`);
-      if (result.status && result.status !== "running") break;
+    let result = await pollTask(user, task.id);
+    if (result?.status === "failed" && /Provider rejected/i.test(String(result.error_message || ""))) {
+      console.log(`[wah] ${key} provider rejected task ${task.id}; retrying in a fresh agent session`);
+      task = await createTask(key, `${instructions}\n\n(Fresh session: the project already exists. Read the current code first, then make the change.)`, false);
+      user.running.taskId = task.id;
+      saveState();
+      console.log(`[wah] ${key} task ${task.id} started (fresh)`);
+      result = await pollTask(user, task.id);
     }
     const { url } = await previewUrl(user.sandboxId);
     user.link = url;
@@ -345,6 +340,30 @@ async function runBuild(key, instructions, resumeTaskId) {
       startBuild(key, pending.instructions, null, pending.channel || channel, pending.conversationId || conversationId);
     }
   });
+}
+
+async function createTask(key, instructions, cont) {
+  const user = state.users[key];
+  const note = secretsNote(key);
+  return sb("POST", `/v1/sandboxes/${user.sandboxId}/tasks`, {
+    prompt: note ? `${instructions}\n\n${note}` : instructions,
+    agent: AGENT,
+    ...(MODEL ? { model: MODEL } : {}),
+    ...(PROVIDER ? { provider: PROVIDER } : {}),
+    continue: cont,
+    timeout_s: TASK_TIMEOUT_S,
+  });
+}
+
+async function pollTask(user, taskId) {
+  let result;
+  const deadline = Date.now() + (TASK_TIMEOUT_S + 120) * 1000;
+  while (Date.now() < deadline) {
+    await sleep(5000);
+    result = await sb("GET", `/v1/sandboxes/${user.sandboxId}/tasks/${taskId}`);
+    if (result.status && result.status !== "running") break;
+  }
+  return result;
 }
 
 function buildEventText(e) {
