@@ -87,9 +87,11 @@ function withLock(key, fn) {
   return next;
 }
 
+const inFlightAtBoot = Object.entries(state.users).filter(([, u]) => u.running?.taskId).map(([key, u]) => [key, u.running.taskId]);
 setTimeout(() => {
-  for (const [key, u] of Object.entries(state.users)) {
-    if (u.running?.taskId) runBuild(key, u.running.instructions, u.running.taskId).catch((e) => console.error("[wah] resume crashed", e));
+  for (const [key, taskId] of inFlightAtBoot) {
+    const u = state.users[key];
+    if (u.running?.taskId === taskId) runBuild(key, u.running.instructions, taskId).catch((e) => console.error("[wah] resume crashed", e));
   }
 }, 3000);
 
