@@ -106,11 +106,15 @@ const KEY_PATTERNS = [
   [/\bxai-[A-Za-z0-9]{20,}/g, "XAI_API_KEY"],
   [/\bhf_[A-Za-z0-9]{20,}/g, "HF_TOKEN"],
   [/\br8_[A-Za-z0-9]{20,}/g, "REPLICATE_API_TOKEN"],
+  [/\bAC[0-9a-f]{32}\b/g, "TWILIO_ACCOUNT_SID"],
+  [/\bSK[0-9a-f]{32}\b/g, "TWILIO_API_KEY"],
 ];
+const TWILIO_TOKEN = /\b[0-9A-Za-z]{32}\b/g;
 const NAMED_KEY = /\b([A-Z][A-Z0-9_]{1,60}_(?:KEY|TOKEN|SECRET))\s*[=:]\s*["']?([^\s"']{8,})["']?/g;
 const KEY_LABELS = {
   ANTHROPIC_API_KEY: "Anthropic", OPENROUTER_API_KEY: "OpenRouter", OPENAI_API_KEY: "OpenAI", GEMINI_API_KEY: "Gemini",
   GROQ_API_KEY: "Groq", XAI_API_KEY: "xAI", HF_TOKEN: "Hugging Face", REPLICATE_API_TOKEN: "Replicate",
+  TWILIO_ACCOUNT_SID: "Twilio account", TWILIO_API_KEY: "Twilio API key", TWILIO_AUTH_TOKEN: "Twilio auth token", TWILIO_API_SECRET: "Twilio API secret",
 };
 
 const secrets = (() => { try { return JSON.parse(fs.readFileSync(SECRETS_FILE, "utf8")); } catch { return {}; } })();
@@ -126,6 +130,10 @@ export function extractKeys(text) {
   for (const [re, name] of KEY_PATTERNS) {
     redacted = redacted.replace(re, (value) => { found[name] = value; return `[${name} saved]`; });
   }
+  if (found.TWILIO_ACCOUNT_SID || found.TWILIO_API_KEY || /twilio|auth\s*token|secret/i.test(text)) {
+    const name = found.TWILIO_API_KEY && !found.TWILIO_ACCOUNT_SID ? "TWILIO_API_SECRET" : found.TWILIO_API_KEY && /secret/i.test(text) ? "TWILIO_API_SECRET" : "TWILIO_AUTH_TOKEN";
+    redacted = redacted.replace(TWILIO_TOKEN, (value) => { found[name] = value; return `[${name} saved]`; });
+  }
   return { found, redacted };
 }
 
@@ -139,6 +147,7 @@ function secretsNote(key) {
   return [
     `SERVER SECRETS: the file .env.local in the project root holds the caller's own API keys as env vars: ${names.join(", ")}.`,
     "Use them only in server-side code (e.g. a Vite server middleware plugin in vite.config.ts). Load them there with loadEnv(mode, process.cwd(), '') from 'vite' and copy them into process.env before creating handlers, so server code can read process.env.<NAME>.",
+    ...(names.some((n) => n.startsWith("TWILIO_")) ? ["Twilio credentials are the caller's own account: use the twilio npm package server-side; to send texts or place calls, use a phone number from their account (list it with client.incomingPhoneNumbers.list()) as the from number."] : []),
     "Never import them into browser code, never prefix them with VITE_, never print, log, echo or cat .env.local, never copy the values into any other file, and keep .env.local in .gitignore. Visitors must never see a key.",
   ].join(" ");
 }
@@ -379,6 +388,65 @@ async function sendText(user, conversationId, text) {
   await twilioClient.messages.create({ from: process.env.TWILIO_PHONE_NUMBER, to: user.phone, body: text });
 }
 
+// ---------- outbound calls on request ----------
+
+const MAX_CALLS = Number.parseInt(process.env.WAH_MAX_CALLS || "5", 10);
+
+function normalizePhone(s) {
+  const d = String(s).replace(/[^0-9+]/g, "");
+  if (/^\+\d{10,15}$/.test(d)) return d;
+  if (/^1\d{10}$/.test(d)) return `+${d}`;
+  if (/^\d{10}$/.test(d)) return `+1${d}`;
+  return null;
+}
+
+async function placeCall(key, to, message) {
+  const user = state.users[key];
+  if (!message.trim()) return { status: "error", note: "No message to say." };
+  if ((user.calls || 0) >= MAX_CALLS) return { status: "limit", note: `Call limit reached (${MAX_CALLS} per person today).` };
+  const everyone = Object.entries(state.users).filter(([, u]) => u.phone && !u.optedOut);
+  let target;
+  if (/^(me|myself)$/i.test(to.trim())) target = [key, user];
+  else {
+    const phone = normalizePhone(to);
+    if (phone) target = everyone.find(([, u]) => normalizePhone(u.phone) === phone);
+    else {
+      const name = to.trim().toLowerCase();
+      const hits = everyone.filter(([, u]) => u.name && u.name.toLowerCase() === name);
+      const loose = hits.length ? hits : everyone.filter(([, u]) => u.name && u.name.toLowerCase().split(/\s+/)[0] === name.split(/\s+/)[0]);
+      if (loose.length > 1) return { status: "ambiguous", note: `More than one attendee is named ${to}; ask for their number.` };
+      target = loose[0];
+    }
+  }
+  if (!target) return { status: "not_allowed", note: "I can only call people who have already texted or called this line today (that keeps it from being used for prank calls). Ask them to text this number first, then try again." };
+  const [targetKey, targetUser] = target;
+  if (targetUser.optedOut || !targetUser.phone) return { status: "not_allowed", note: "That person has opted out." };
+  const from = targetKey === key ? "" : `${user.name || "Another walker"} asked me to call you. `;
+  const greeting = `Hi, this is the Walk and Hack line. ${from}${message.trim()}`.slice(0, 600);
+  const voice = tacRef?.getChannel?.("voice");
+  try {
+    if (voice?.initiateOutboundConversation) {
+      await voice.initiateOutboundConversation({
+        to: targetUser.phone,
+        conversationRelayConfig: { url: `wss://${PUBLIC_HOST}/ws`, welcomeGreeting: greeting, welcomeGreetingInterruptible: "any" },
+      });
+    } else {
+      if (!twilioClient) twilioClient = twilio(process.env.TWILIO_API_KEY, process.env.TWILIO_API_SECRET, { accountSid: process.env.TWILIO_ACCOUNT_SID });
+      const twiml = new twilio.twiml.VoiceResponse();
+      twiml.say(greeting);
+      await twilioClient.calls.create({ from: process.env.TWILIO_PHONE_NUMBER, to: targetUser.phone, twiml: twiml.toString() });
+    }
+  } catch (e) {
+    console.error(`[wah] ${key} outbound call failed:`, e.message);
+    return { status: "error", note: "The call didn't go through. Try again in a minute." };
+  }
+  user.calls = (user.calls || 0) + 1;
+  if (targetKey !== key) addTurn(targetUser, { role: "event", text: `Called this person at ${user.name || "another attendee"}'s request and said: ${message.trim()}` });
+  saveState();
+  console.log(`[wah] ${key} placed call to ${targetKey}`);
+  return { status: "calling", note: `Calling ${targetKey === key ? "the caller" : targetUser.name || "them"} now.` };
+}
+
 // ---------- the talker ----------
 
 const TOOLS = [
@@ -400,6 +468,21 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "call",
+      description: "Place a phone call from the Walk & Hack number to someone and speak a message, when the caller asks you to call someone (or themselves). Only works for people who have already texted or called this line today. After the message the person can talk to you like any caller.",
+      parameters: {
+        type: "object",
+        properties: {
+          to: { type: "string", description: "Phone number, or the name of another attendee as it appears on the wall, or 'me' for the caller." },
+          message: { type: "string", description: "What to say when they pick up, written to be spoken aloud, one to three sentences. No URLs; say the link is in their texts if relevant." },
+        },
+        required: ["to", "message"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "set_name",
       description: "Record the caller's name for the live wall, only when they tell you their name or ask to be credited.",
       parameters: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
@@ -410,7 +493,7 @@ const TOOLS = [
 function systemPrompt(key, user, channel, memory) {
   const voice = channel === "voice";
   const lines = [
-    "You are the Walk & Hack build line: AI Tinkerers NYC x Twilio, a Saturday walk through Central Park where people build web apps by text or by phone call. The caller is an attendee. You talk, and you have one hand: the build tool.",
+    "You are the Walk & Hack build line: AI Tinkerers NYC x Twilio, a Saturday walk through Central Park where people build web apps by text or by phone call. The caller is an attendee. You talk, and you have tools: build (the main one), call, and set_name.",
     "",
     voice
       ? "CHANNEL: VOICE. The caller is on a phone call outdoors. Reply in one or two short spoken sentences. No lists, no URLs, no markdown. If they need the link, say it's in their texts (it is texted automatically after every build)."
@@ -427,6 +510,7 @@ function systemPrompt(key, user, channel, memory) {
     "- If they ask what this is or how it works: Twilio Agent Connect handles the phone and memory, each caller gets a private sandbox, Claude does the building, Jon from AI Tinkerers built the bridge. Honest and short.",
     "- If they give their name, call set_name. Builds appear on the live wall (" + WALL_URL + ") with the project title. Giving a name is how they submit for the demo circle at 12:30: named apps go to the top of the wall as the lineup, unnamed ones show lower with the title only. If they ask how to submit or enter, tell them: just tell me your name. Never mention phone numbers.",
     "- API keys: if the caller wants their app to call an AI model or another paid API with their own key, tell them to just text the key here. It is pulled out of the chat before you ever see it, stored on their app's server only (never in the page, never visible to visitors), and the builder is told to use it server-side. Suggest a fresh key with a spending limit that they revoke after today. You will see '[NAME saved]' where a key was; never ask them to repeat it. Do not send them to Jon for keys.",
+    "- Calls: if the caller asks you to call someone (a friend on the walk, or themselves), use the call tool with a short spoken message. It only reaches people who have texted or called this line today; if it says not_allowed, explain that and suggest they get their friend to text the number first. If someone wants their own app to text or call people, tell them to text their Twilio account SID and auth token here; they get stored on their app's server like any key.",
     "- Say 'reply STOP to opt out' only if asked how to stop.",
     "",
     `CALLER STATE: ${user.title ? `project "${user.title}"` : "no project yet"}; ${user.link ? `current link ${user.link}` : "no link yet"}; ${user.running ? "a build is running right now" : "no build running"}; ${user.pending ? "changes are queued for the next build" : ""}; ${user.name ? `name ${user.name}` : "name not given"}; builds so far ${user.tasks}; ${keyNames(key).length ? `caller's keys stored on their server: ${keyNames(key).join(", ")}` : "no caller API keys stored"}.`,
@@ -495,6 +579,9 @@ async function talk(key, channel, conversationId, memory) {
         const instructions = String(args.instructions || "").trim() || `Apply this change to the existing app: ${lastUser}`;
         result = startBuild(key, instructions, String(args.title || "").slice(0, 60) || null, channel, conversationId);
         addTurn(user, { role: "event", text: `build tool called (${result.status}) with title "${user.title || args.title}" and instructions: ${instructions.slice(0, 300)}` });
+      } else if (call.function.name === "call") {
+        result = await placeCall(key, String(args.to || ""), String(args.message || ""));
+        addTurn(user, { role: "event", text: `call tool: ${result.status} (${result.note})` });
       } else if (call.function.name === "set_name") {
         user.name = String(args.name || "").slice(0, 40) || null;
         saveState();
