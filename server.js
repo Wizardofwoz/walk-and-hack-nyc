@@ -2,7 +2,7 @@ import "dotenv/config";
 
 import { SMSChannel, TAC, TACConfig, TACServer, VoiceChannel } from "twilio-agent-connect";
 
-import { attachTAC, broadcast, handleAgentMessage, health, publicBuilds } from "./agents/wah-agent.js";
+import { attachTAC, broadcast, extractKeys, handleAgentMessage, health, publicBuilds } from "./agents/wah-agent.js";
 import { wallHtml } from "./agents/wall.js";
 
 for (const name of [
@@ -23,7 +23,7 @@ tac.registerChannel(new VoiceChannel(tac, { memoryMode: "always" }));
 tac.registerChannel(new SMSChannel(tac, { memoryMode: "always" }));
 
 tac.onMessageReady(async ({ conversationId, profileId, message, author, memory, session, channel }) => {
-  console.log(`[${channel}] ${message}`);
+  console.log(`[${channel}] ${extractKeys(message || "").redacted}`);
   return handleAgentMessage(message, { conversationId, profileId, author, memory, session, channel });
 });
 

@@ -18,6 +18,7 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const PUBLIC_HOST = process.env.WAH_PUBLIC_HOST || process.env.TWILIO_VOICE_PUBLIC_DOMAIN || "walk.dweller.sh";
 const WALL_URL = `https://${PUBLIC_HOST}/wall`;
 const PROMPT_TURNS = 30;
+const SECRETS_FILE = process.env.WAH_SECRETS_FILE || path.join(path.dirname(STATE_FILE), "secrets.json");
 
 const state = loadState();
 const locks = new Map();
@@ -87,7 +88,84 @@ function withLock(key, fn) {
   return next;
 }
 
+// ---------- caller API keys (texted in, kept out of the transcript) ----------
+
+const KEY_PATTERNS = [
+  [/\bsk-ant-[A-Za-z0-9_-]{20,}/g, "ANTHROPIC_API_KEY"],
+  [/\bsk-or-[A-Za-z0-9_-]{20,}/g, "OPENROUTER_API_KEY"],
+  [/\bsk-[A-Za-z0-9_-]{20,}/g, "OPENAI_API_KEY"],
+  [/\bAIza[A-Za-z0-9_-]{30,}/g, "GEMINI_API_KEY"],
+  [/\bgsk_[A-Za-z0-9]{20,}/g, "GROQ_API_KEY"],
+  [/\bxai-[A-Za-z0-9]{20,}/g, "XAI_API_KEY"],
+  [/\bhf_[A-Za-z0-9]{20,}/g, "HF_TOKEN"],
+  [/\br8_[A-Za-z0-9]{20,}/g, "REPLICATE_API_TOKEN"],
+];
+const NAMED_KEY = /\b([A-Z][A-Z0-9_]{1,60}_(?:KEY|TOKEN|SECRET))\s*[=:]\s*["']?([^\s"']{8,})["']?/g;
+const KEY_LABELS = {
+  ANTHROPIC_API_KEY: "Anthropic", OPENROUTER_API_KEY: "OpenRouter", OPENAI_API_KEY: "OpenAI", GEMINI_API_KEY: "Gemini",
+  GROQ_API_KEY: "Groq", XAI_API_KEY: "xAI", HF_TOKEN: "Hugging Face", REPLICATE_API_TOKEN: "Replicate",
+};
+
+const secrets = (() => { try { return JSON.parse(fs.readFileSync(SECRETS_FILE, "utf8")); } catch { return {}; } })();
+
+function saveSecrets() {
+  fs.mkdirSync(path.dirname(SECRETS_FILE), { recursive: true });
+  fs.writeFileSync(SECRETS_FILE, JSON.stringify(secrets, null, 2), { mode: 0o600 });
+}
+
+export function extractKeys(text) {
+  const found = {};
+  let redacted = String(text).replace(NAMED_KEY, (_, name, value) => { found[name] = value; return `[${name} saved]`; });
+  for (const [re, name] of KEY_PATTERNS) {
+    redacted = redacted.replace(re, (value) => { found[name] = value; return `[${name} saved]`; });
+  }
+  return { found, redacted };
+}
+
+function keyNames(key) {
+  return Object.keys(secrets[key] || {});
+}
+
+function secretsNote(key) {
+  const names = keyNames(key);
+  if (!names.length) return "";
+  return [
+    `SERVER SECRETS: the file .env.local in the project root holds the caller's own API keys as env vars: ${names.join(", ")}.`,
+    "Use them only in server-side code (e.g. a Vite server middleware plugin in vite.config.ts). Load them there with loadEnv(mode, process.cwd(), '') from 'vite' and copy them into process.env before creating handlers, so server code can read process.env.<NAME>.",
+    "Never import them into browser code, never prefix them with VITE_, never print, log, echo or cat .env.local, never copy the values into any other file, and keep .env.local in .gitignore. Visitors must never see a key.",
+  ].join(" ");
+}
+
+async function writeSecretsFile(key) {
+  const user = await ensureApp(key);
+  await waitSandboxRunning(user.sandboxId);
+  const env = Object.entries(secrets[key] || {}).map(([k, v]) => `${k}=${v}`).join("\n") + "\n";
+  await putFile(user.sandboxId, ".env.local", env);
+  let ignore = "";
+  try { ignore = await getFile(user.sandboxId, ".gitignore"); } catch { /* none yet */ }
+  if (!/^\.env\.local$|^\.env\*|^\*\.local$/m.test(ignore)) {
+    await putFile(user.sandboxId, ".gitignore", `${ignore.replace(/\n?$/, "\n")}.env.local\n`.replace(/^\n/, ""));
+  }
+}
+
 // ---------- sandboxd ----------
+
+async function putFile(sandboxId, filePath, content) {
+  const res = await fetch(`${SANDBOXD_URL}/v1/sandboxes/${sandboxId}/files?path=${encodeURIComponent(filePath)}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${SANDBOXD_API_KEY}`, "Content-Type": "application/octet-stream" },
+    body: content,
+  });
+  if (!res.ok) throw new Error(`sandboxd PUT file ${filePath} -> ${res.status}: ${(await res.text()).slice(0, 200)}`);
+}
+
+async function getFile(sandboxId, filePath) {
+  const res = await fetch(`${SANDBOXD_URL}/v1/sandboxes/${sandboxId}/files/content?path=${encodeURIComponent(filePath)}`, {
+    headers: { Authorization: `Bearer ${SANDBOXD_API_KEY}` },
+  });
+  if (!res.ok) throw new Error(`sandboxd GET file ${filePath} -> ${res.status}`);
+  return res.text();
+}
 
 async function sb(method, route, body) {
   const res = await fetch(`${SANDBOXD_URL}${route}`, {
@@ -189,8 +267,9 @@ async function runBuild(key, instructions) {
   try {
     await ensureApp(key);
     await waitSandboxRunning(user.sandboxId);
+    const note = secretsNote(key);
     const task = await sb("POST", `/v1/sandboxes/${user.sandboxId}/tasks`, {
-      prompt: instructions,
+      prompt: note ? `${instructions}\n\n${note}` : instructions,
       agent: AGENT,
       ...(MODEL ? { model: MODEL } : {}),
       ...(PROVIDER ? { provider: PROVIDER } : {}),
@@ -315,7 +394,7 @@ const TOOLS = [
   },
 ];
 
-function systemPrompt(user, channel, memory) {
+function systemPrompt(key, user, channel, memory) {
   const voice = channel === "voice";
   const lines = [
     "You are the Walk & Hack build line: AI Tinkerers NYC x Twilio, a Saturday walk through Central Park where people build web apps by text or by phone call. The caller is an attendee. You talk, and you have one hand: the build tool.",
@@ -334,9 +413,10 @@ function systemPrompt(user, channel, memory) {
     "- Small talk is fine; keep it brief and steer back to building.",
     "- If they ask what this is or how it works: Twilio Agent Connect handles the phone and memory, each caller gets a private sandbox, Claude does the building, Jon from AI Tinkerers built the bridge. Honest and short.",
     "- If they give their name, call set_name. Builds appear on the live wall (" + WALL_URL + ") with the project title. Giving a name is how they submit for the demo circle at 12:30: named apps go to the top of the wall as the lineup, unnamed ones show lower with the title only. If they ask how to submit or enter, tell them: just tell me your name. Never mention phone numbers.",
+    "- API keys: if the caller wants their app to call an AI model or another paid API with their own key, tell them to just text the key here. It is pulled out of the chat before you ever see it, stored on their app's server only (never in the page, never visible to visitors), and the builder is told to use it server-side. Suggest a fresh key with a spending limit that they revoke after today. You will see '[NAME saved]' where a key was; never ask them to repeat it. Do not send them to Jon for keys.",
     "- Say 'reply STOP to opt out' only if asked how to stop.",
     "",
-    `CALLER STATE: ${user.title ? `project "${user.title}"` : "no project yet"}; ${user.link ? `current link ${user.link}` : "no link yet"}; ${user.running ? "a build is running right now" : "no build running"}; ${user.pending ? "changes are queued for the next build" : ""}; ${user.name ? `name ${user.name}` : "name not given"}; builds so far ${user.tasks}.`,
+    `CALLER STATE: ${user.title ? `project "${user.title}"` : "no project yet"}; ${user.link ? `current link ${user.link}` : "no link yet"}; ${user.running ? "a build is running right now" : "no build running"}; ${user.pending ? "changes are queued for the next build" : ""}; ${user.name ? `name ${user.name}` : "name not given"}; builds so far ${user.tasks}; ${keyNames(key).length ? `caller's keys stored on their server: ${keyNames(key).join(", ")}` : "no caller API keys stored"}.`,
   ];
   const mem = memoryText(memory);
   if (mem) lines.push("", "TWILIO MEMORY (from past conversations):", mem);
@@ -353,8 +433,8 @@ function memoryText(memory) {
   return out.slice(0, 12).join("\n");
 }
 
-function toMessages(user, channel, memory) {
-  const msgs = [{ role: "system", content: systemPrompt(user, channel, memory) }];
+function toMessages(key, user, channel, memory) {
+  const msgs = [{ role: "system", content: systemPrompt(key, user, channel, memory) }];
   const turns = user.turns.slice(-PROMPT_TURNS);
   for (const t of turns) {
     if (t.role === "user") msgs.push({ role: "user", content: `[${t.ch || "sms"}] ${t.text}` });
@@ -385,7 +465,7 @@ async function openrouter(messages, tools) {
 
 async function talk(key, channel, conversationId, memory) {
   const user = state.users[key];
-  const messages = toMessages(user, channel, memory);
+  const messages = toMessages(key, user, channel, memory);
   let reply = "";
   for (let i = 0; i < 3; i += 1) {
     const msg = await openrouter(messages, TOOLS);
@@ -425,8 +505,10 @@ function fallbackReply(key, text, channel, conversationId) {
 export async function handleAgentMessage(userMessage, context = {}) {
   const key = userKey(context);
   const user = state.users[key];
-  const text = String(userMessage || "").trim();
+  const raw = String(userMessage || "").trim();
   const channel = context.channel === "voice" ? "voice" : "sms";
+  const { found, redacted } = extractKeys(raw);
+  const text = redacted;
   const word = text.toLowerCase().replace(/[^a-z]/g, "");
 
   if (word === "stop" || word === "unsubscribe" || word === "cancel") {
@@ -440,6 +522,30 @@ export async function handleAgentMessage(userMessage, context = {}) {
   return withLock(key, async () => {
     const firstContact = user.turns.length === 0;
     addTurn(user, { role: "user", ch: channel, text });
+    const names = Object.keys(found);
+    if (names.length) {
+      secrets[key] = { ...(secrets[key] || {}), ...found };
+      saveSecrets();
+      const labels = names.map((n) => KEY_LABELS[n] || n).join(" and ");
+      try {
+        await writeSecretsFile(key);
+        console.log(`[wah] ${key} stored keys: ${names.join(", ")}`);
+        addTurn(user, { role: "event", text: `Caller's keys stored in .env.local on their app server: ${names.join(", ")}. The value never appears in this transcript.` });
+      } catch (e) {
+        console.error(`[wah] ${key} storing keys failed:`, e.message);
+        const fail = `Got your ${labels} key but couldn't save it to your app just now. Text it again in a minute.`;
+        addTurn(user, { role: "assistant", ch: channel, text: fail });
+        return fail;
+      }
+      const rest = text.replace(/\[[A-Z0-9_]+ saved\]/g, "").replace(/[^A-Za-z]/g, "");
+      if (rest.length < 25) {
+        const r = startBuild(key, `The caller just added their own API key(s) (${names.join(", ")}). Wire the existing app to use them from server-side code so visitors need no key and never see one. If the app has no feature that needs them yet, just load them on the server so they are ready, and keep everything else unchanged.`, null, channel, context.conversationId);
+        const reply = `Saved your ${labels} key on your app's server. Visitors never see it, and it's out of this chat. ${r.status === "queued" ? "I'll wire it in right after the current build." : r.status === "started" ? "Wiring your app to use it now; link coming." : r.note}\n\nTip: use a key with a spending limit and revoke it after today.`;
+        addTurn(user, { role: "assistant", ch: channel, text: reply });
+        if (firstContact && channel === "sms") return `${MASTHEAD}\n\n${reply}`;
+        return reply;
+      }
+    }
     let reply;
     try {
       reply = OPENROUTER_API_KEY ? await talk(key, channel, context.conversationId, context.memory) : "";
