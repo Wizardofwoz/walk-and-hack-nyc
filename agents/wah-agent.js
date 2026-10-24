@@ -42,8 +42,7 @@ function loadState() {
     const s = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
     for (const u of Object.values(s.users || {})) {
       u.turns ||= [];
-      u.running = null;
-      u.pending = null;
+      if (!u.running?.taskId) u.running = null;
     }
     return s;
   } catch {
@@ -87,6 +86,12 @@ function withLock(key, fn) {
   locks.set(key, next.catch(() => {}));
   return next;
 }
+
+setTimeout(() => {
+  for (const [key, u] of Object.entries(state.users)) {
+    if (u.running?.taskId) runBuild(key, u.running.instructions, u.running.taskId).catch((e) => console.error("[wah] resume crashed", e));
+  }
+}, 3000);
 
 // ---------- caller API keys (texted in, kept out of the transcript) ----------
 
@@ -260,15 +265,20 @@ function startBuild(key, instructions, title, channel, conversationId) {
   return { status: "started", note: user.sandboxId ? "Build started. Takes about a minute." : "Workshop is being set up and the first build started. Takes a few minutes." };
 }
 
-async function runBuild(key, instructions) {
+async function runBuild(key, instructions, resumeTaskId) {
   const user = state.users[key];
   const { channel, conversationId } = user.running;
   let event;
   try {
+    let task;
+    if (resumeTaskId) {
+      task = { id: resumeTaskId };
+      console.log(`[wah] ${key} resuming task ${task.id} after restart`);
+    } else {
     await ensureApp(key);
     await waitSandboxRunning(user.sandboxId);
     const note = secretsNote(key);
-    const task = await sb("POST", `/v1/sandboxes/${user.sandboxId}/tasks`, {
+    task = await sb("POST", `/v1/sandboxes/${user.sandboxId}/tasks`, {
       prompt: note ? `${instructions}\n\n${note}` : instructions,
       agent: AGENT,
       ...(MODEL ? { model: MODEL } : {}),
@@ -280,6 +290,7 @@ async function runBuild(key, instructions) {
     user.tasks += 1;
     saveState();
     console.log(`[wah] ${key} task ${task.id} started`);
+    }
 
     let result;
     const deadline = Date.now() + (TASK_TIMEOUT_S + 120) * 1000;
